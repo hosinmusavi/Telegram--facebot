@@ -4,11 +4,8 @@ import cv2
 import numpy as np
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import dlib
-from PIL import Image
-import io
 
-# توکن از محیط می‌گیره
+# توکن ربات (از متغیر محیطی)
 TOKEN = os.environ.get('BOT_TOKEN')
 
 # تنظیمات لاگ
@@ -18,181 +15,196 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# بارگیری مدل تشخیص چهره (dlib)
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")  # نیاز به دانلود فایل
+# ذخیره عکس‌های کاربران
+user_photos = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع ربات"""
+    user_id = update.effective_user.id
+    user_photos[user_id] = []
+    
     await update.message.reply_text(
-        "🤖 **FaceSwap Bot**\n\n"
-        "📸 **دو تا عکس بفرست:**\n"
-        "۱. عکس شخص اول\n"
-        "۲. عکس شخص دوم\n\n"
-        "سپس جای چهره‌ها رو عوض می‌کنم!"
+        "🤖 **FaceSwap Bot - نسخه واقعی**\n\n"
+        "📸 **نحوه کار:**\n"
+        "1. این پیام رو ببین 👇\n"
+        "2. عکس اول رو بفرست\n"
+        "3. عکس دوم رو بفرست\n"
+        "4. عکس جابه‌جا شده رو دریافت کن\n\n"
+        "📎 الان **عکس اول** رو بفرست..."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت و پردازش عکس"""
+    user_id = update.effective_user.id
+    
+    # اگر کاربر جدیده، لیست بساز
+    if user_id not in user_photos:
+        user_photos[user_id] = []
+    
     try:
-        user_id = update.effective_user.id
-        
-        # ایجاد پوشه برای کاربر اگر وجود ندارد
-        user_folder = f"user_{user_id}"
-        os.makedirs(user_folder, exist_ok=True)
-        
-        # دریافت عکس
+        # گرفتن عکس با بهترین کیفیت
         photo = update.message.photo[-1]
         file = await photo.get_file()
         
         # دانلود عکس
+        await update.message.reply_text("📥 در حال دریافت عکس...")
         photo_bytes = await file.download_as_bytearray()
+        
+        # تبدیل به OpenCV format
         nparr = np.frombuffer(photo_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         # ذخیره عکس
-        photo_count = len([f for f in os.listdir(user_folder) if f.endswith('.jpg')])
-        photo_path = f"{user_folder}/photo_{photo_count + 1}.jpg"
-        cv2.imwrite(photo_path, img)
+        user_photos[user_id].append(img)
         
-        # بررسی تعداد عکس‌های دریافت شده
-        photos = [f for f in os.listdir(user_folder) if f.endswith('.jpg')]
-        
-        if len(photos) == 1:
+        # بررسی تعداد عکس‌ها
+        if len(user_photos[user_id]) == 1:
             await update.message.reply_text(
-                "✅ عکس اول دریافت شد!\n"
-                "📸 حالا عکس دوم رو بفرست."
+                "✅ **عکس اول دریافت شد!**\n"
+                "📸 حالا **عکس دوم** رو بفرست..."
             )
-        elif len(photos) == 2:
+            
+        elif len(user_photos[user_id]) == 2:
             await update.message.reply_text(
-                "✅ هر دو عکس دریافت شدند!\n"
-                "⚡ در حال پردازش FaceSwap..."
+                "✅ **هر دو عکس دریافت شدند!**\n"
+                "⚡ در حال پردازش FaceSwap...\n"
+                "⏳ لطفاً 10-15 ثانیه صبر کن..."
             )
             
             # پردازش FaceSwap
-            result = await process_faceswap(user_folder)
+            img1 = user_photos[user_id][0]
+            img2 = user_photos[user_id][1]
+            result = await process_faceswap(img1, img2)
             
-            if result:
+            if result is not None:
                 # ارسال عکس نتیجه
-                with open(result, 'rb') as photo_file:
-                    await update.message.reply_photo(
-                        photo=photo_file,
-                        caption="🎉 **FaceSwap کامل شد!**\n\n"
-                                "چهره‌ها با موفقیت جابه‌جا شدند."
-                    )
+                _, buffer = cv2.imencode('.jpg', result)
+                photo_bytes = buffer.tobytes()
                 
-                # پاک کردن فایل‌های موقت
-                for file in os.listdir(user_folder):
-                    os.remove(f"{user_folder}/{file}")
-                os.rmdir(user_folder)
+                await update.message.reply_photo(
+                    photo=photo_bytes,
+                    caption="🎉 **FaceSwap کامل شد!**\n\n"
+                           "چهره‌ها با موفقیت جابه‌جا شدند.\n"
+                           "برای شروع جدید /start رو بفرست."
+                )
             else:
                 await update.message.reply_text(
-                    "❌ در پردازش مشکلی پیش آمد.\n"
-                    "مطمئن شوید عکس‌ها چهره واضح دارند."
+                    "❌ **نتوانستم چهره‌ها رو پردازش کنم!**\n\n"
+                    "لطفاً:\n"
+                    "• عکس‌های واضح با چهره کامل بفرست\n"
+                    "• نور کافی باشد\n"
+                    "• چهره مستقیم به دوربین باشد\n\n"
+                    "/start رو بفرست تا دوباره شروع کنیم."
                 )
+            
+            # پاک کردن عکس‌های کاربر
+            user_photos[user_id] = []
+            
         else:
             await update.message.reply_text(
-                "⚠️ بیشتر از دو عکس دریافت کردی.\n"
-                "دوباره از اول شروع می‌کنم..."
+                "⚠️ **بیش از دو عکس فرستادی!**\n"
+                "لطفاً /start رو بفرست تا از اول شروع کنیم."
             )
-            # پاک کردن پوشه قدیمی
-            for file in os.listdir(user_folder):
-                os.remove(f"{user_folder}/{file}")
+            user_photos[user_id] = []
             
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text(f"❌ خطا: {str(e)}")
+        logger.error(f"خطا: {e}")
+        await update.message.reply_text(f"❌ خطا در پردازش: {str(e)[:100]}")
+        if user_id in user_photos:
+            user_photos[user_id] = []
 
-async def process_faceswap(user_folder):
-    """پردازش FaceSwap واقعی"""
+async def process_faceswap(img1, img2):
+    """تابع اصلی پردازش FaceSwap"""
     try:
-        # خواندن دو عکس
-        photos = sorted([f for f in os.listdir(user_folder) if f.endswith('.jpg')])
+        # تشخیص چهره با Haar Cascade
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         
-        if len(photos) < 2:
-            return None
-        
-        img1 = cv2.imread(f"{user_folder}/{photos[0]}")
-        img2 = cv2.imread(f"{user_folder}/{photos[1]}")
+        # تبدیل به خاکستری
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         
         # تشخیص چهره‌ها
-        faces1 = detector(img1)
-        faces2 = detector(img2)
+        faces1 = face_cascade.detectMultiScale(gray1, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        faces2 = face_cascade.detectMultiScale(gray2, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         
         if len(faces1) == 0 or len(faces2) == 0:
+            logger.warning("چهره‌ای تشخیص داده نشد")
             return None
         
-        # ساده‌ترین روش: crop و جایگزینی
-        # (این نسخه ساده‌ست، نسخه کامل نیاز به تکنیک‌های پیشرفته‌تر داره)
-        
-        # گرفتن اولین چهره از هر عکس
-        face1 = faces1[0]
-        face2 = faces2[0]
+        # بزرگترین چهره را بگیر
+        (x1, y1, w1, h1) = max(faces1, key=lambda rect: rect[2] * rect[3])
+        (x2, y2, w2, h2) = max(faces2, key=lambda rect: rect[2] * rect[3])
         
         # برش چهره‌ها
-        x1, y1, w1, h1 = face1.left(), face1.top(), face1.width(), face1.height()
-        x2, y2, w2, h2 = face2.left(), face2.top(), face2.width(), face2.height()
+        face1 = img1[y1:y1+h1, x1:x1+w1]
+        face2 = img2[y2:y2+h2, x2:x2+w2]
         
-        # resize چهره دوم به اندازه اول
-        face2_resized = cv2.resize(img2[y2:y2+h2, x2:x2+w2], (w1, h1))
+        # تغییر سایز چهره دوم به اندازه اول
+        face2_resized = cv2.resize(face2, (w1, h1))
         
-        # جایگزینی
+        # ایجاد ماسک بیضی برای ترکیب بهتر
+        mask = np.zeros((h1, w1), dtype=np.float32)
+        cv2.ellipse(mask, (w1//2, h1//2), (w1//2, h1//2), 0, 0, 360, 1, -1)
+        mask = cv2.GaussianBlur(mask, (15, 15), 0)
+        mask = mask[:, :, np.newaxis]  # برای broadcast با RGB
+        
+        # ترکیب چهره‌ها
         result = img1.copy()
-        result[y1:y1+h1, x1:x1+w1] = face2_resized
+        result_face_area = result[y1:y1+h1, x1:x1+w1]
         
-        # ذخیره نتیجه
-        output_path = f"{user_folder}/result.jpg"
-        cv2.imwrite(output_path, result)
+        # blend چهره جدید با پس‌زمینه
+        blended = result_face_area * (1 - mask) + face2_resized * mask
+        result[y1:y1+h1, x1:x1+w1] = blended.astype(np.uint8)
         
-        return output_path
+        # اضافه کردن متن
+        cv2.putText(result, "FaceSwap", (20, 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+        cv2.putText(result, "by @hosinmusavi", (20, 80), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        
+        return result
         
     except Exception as e:
-        logger.error(f"FaceSwap error: {e}")
+        logger.error(f"خطا در پردازش: {e}")
         return None
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """راهنما"""
     help_text = """
-🎭 **دستورات:**
-/start - شروع کار
-/help - راهنما
-/swap - شروع FaceSwap جدید
+🤖 **FaceSwap Bot - راهنما**
 
-📸 **نحوه کار:**
-۱. دستور /swap رو بفرست
-۲. دو عکس با چهره واضح بفرست
-۳. منتظر نتیجه باش
+📸 **دستورات:**
+/start - شروع کار جدید
+/help - نمایش این راهنما
 
-⚠️ **نیازها:**
-• هر عکس باید حداقل یک چهره واضح داشته باشد
-• نور کافی باشد
-• چهره مستقیم به دوربین باشد
+🔄 **نحوه کار:**
+1. /start رو بفرست
+2. **عکس اول** (با چهره واضح)
+3. **عکس دوم** (با چهره واضح)
+4. منتظر **عکس نتیجه** باش
+
+⚠️ **نکات مهم:**
+• هر عکس باید **یک چهره واضح** داشته باشد
+• **نور** کافی باشد
+• چهره **مستقیم** به دوربین باشد
+• برای شروع جدید /start رو بفرست
+
+⏱️ **زمان پردازش:** 10-20 ثانیه
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-async def swap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_folder = f"user_{user_id}"
-    
-    # پاک کردن پوشه قدیمی
-    if os.path.exists(user_folder):
-        for file in os.listdir(user_folder):
-            os.remove(f"{user_folder}/{file}")
-        os.rmdir(user_folder)
-    
-    await update.message.reply_text(
-        "🔄 **آماده برای FaceSwap جدید**\n\n"
-        "لطفاً اولین عکس رو بفرست..."
-    )
-
 def main():
+    """تابع اصلی"""
     # ساخت اپلیکیشن
     application = Application.builder().token(TOKEN).build()
     
     # اضافه کردن دستورات
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("swap", swap_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     # شروع ربات
+    logger.info("🚀 FaceSwap Bot شروع به کار کرد...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
