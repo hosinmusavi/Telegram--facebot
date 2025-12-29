@@ -2,5 +2,3 @@ python-telegram-bot==20.3
 opencv-python-headless==4.8.1
 numpy==1.24.3
 pillow==10.0.0
-dlib==19.24.2
-cmake==3.27.7
