@@ -1,0 +1,9 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 60
+
+[environment]
+BOT_TOKEN = "{{.Env.BOT_TOKEN}}"
