@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+*.log
+*.jpg
+*.png
+*.mp4
+.DS_Store
+config.json
+secrets.txt
